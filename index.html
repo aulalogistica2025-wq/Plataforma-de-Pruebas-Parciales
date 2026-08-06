@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manifiesto de Evaluación · Logística Internacional</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js" onerror="window.__MAMMOTH_FAILED=true;"></script>
+<!-- Firebase (base de datos compartida entre docente y estudiantes en producción) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+/* =========================================================================
+   CONFIGURACIÓN DE FIREBASE
+   =========================================================================
+   Esta app necesita una base de datos compartida en la nube para que las
+   pruebas creadas por el docente y las respuestas de los estudiantes se
+   guarden en el mismo lugar (no solo en el navegador de cada persona).
+
+   Firebase (Google) ofrece un plan gratuito ("Spark") más que suficiente
+   para un curso universitario. Sigue los pasos del README.md para crear
+   tu proyecto y reemplaza los valores de abajo por los tuyos.
+
+   Mientras dejes "TU_API_KEY" sin cambiar, la aplicación funcionará en
+   "modo local de prueba": los datos solo se guardan en el navegador
+   actual y NO se comparten entre docente y estudiantes. Sirve para
+   probar la interfaz, pero no para aplicar pruebas reales.
+   ========================================================================= */
+
+window.FIREBASE_CONFIG = {
+  apiKey: "TU_API_KEY",
+  authDomain: "TU_PROYECTO.firebaseapp.com",
+  projectId: "TU_PROYECTO",
+  storageBucket: "TU_PROYECTO.appspot.com",
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:xxxxxxxxxxxxxxxxxxxxxx"
+};
+
+</script>
+<script>
+/* =========================================================================
+   ADAPTADOR DE ALMACENAMIENTO
+   =========================================================================
+   Provee window.storage.{get,set,delete,list} con la misma firma que usa
+   la aplicación (key, shared) para que index.html no necesite cambios.
+
+   - Si assets/firebase-config.js tiene llaves reales -> usa Firestore
+     (compartido entre todos los usuarios: docente y estudiantes).
+   - Si no -> usa localStorage del navegador (modo local de prueba,
+     NO compartido entre dispositivos/personas).
+   ========================================================================= */
+(function(){
+  const cfg = window.FIREBASE_CONFIG || {};
+  const LS_PREFIX = 'pruebas_logistica__';
+  let db = null;
+  let useFirebase = false;
+
+  if(cfg.apiKey && cfg.apiKey !== 'TU_API_KEY' && window.firebase){
+    try{
+      firebase.initializeApp(cfg);
+      db = firebase.firestore();
+      useFirebase = true;
+    }catch(e){
+      console.error('No se pudo inicializar Firebase, usando modo local.', e);
+    }
+  }
+  window.STORAGE_MODE = useFirebase ? 'firebase' : 'local';
+
+  async function fbGet(key){
+    const doc = await db.collection('storage').doc(key).get();
+    return doc.exists ? { key, value: doc.data().value } : null;
+  }
+  async function fbSet(key, value){
+    await db.collection('storage').doc(key).set({ value, updated: Date.now() });
+    return { key, value };
+  }
+  async function fbDelete(key){
+    await db.collection('storage').doc(key).delete();
+    return { key, deleted: true };
+  }
+  async function fbList(prefix){
+    // Nota: en un curso pequeño esto es suficiente. Para volúmenes grandes,
+    // conviene indexar por colección/subcolección en vez de filtrar en cliente.
+    const snap = await db.collection('storage').get();
+    const keys = [];
+    snap.forEach(d => { if(!prefix || d.id.startsWith(prefix)) keys.push(d.id); });
+    return { keys };
+  }
+
+  function lsGet(key){
+    const v = localStorage.getItem(LS_PREFIX + key);
+    return v != null ? { key, value: v } : null;
+  }
+  function lsSet(key, value){
+    localStorage.setItem(LS_PREFIX + key, value);
+    return { key, value };
+  }
+  function lsDelete(key){
+    localStorage.removeItem(LS_PREFIX + key);
+    return { key, deleted: true };
+  }
+  function lsList(prefix){
+    const keys = [];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k.startsWith(LS_PREFIX)){
+        const real = k.slice(LS_PREFIX.length);
+        if(!prefix || real.startsWith(prefix)) keys.push(real);
+      }
+    }
+    return { keys };
+  }
+
+  window.storage = {
+    async get(key, _shared){
+      try{ return useFirebase ? await fbGet(key) : lsGet(key); }
+      catch(e){ console.error('storage.get', e); return null; }
+    },
+    async set(key, value, _shared){
+      try{ return useFirebase ? await fbSet(key, value) : lsSet(key, value); }
+      catch(e){ console.error('storage.set', e); return null; }
+    },
+    async delete(key, _shared){
+      try{ return useFirebase ? await fbDelete(key) : lsDelete(key); }
+      catch(e){ console.error('storage.delete', e); return null; }
+    },
+    async list(prefix, _shared){
+      try{ return useFirebase ? await fbList(prefix) : lsList(prefix); }
+      catch(e){ console.error('storage.list', e); return { keys: [] }; }
+    }
+  };
+
+  document.addEventListener('DOMContentLoaded', function(){
+    if(!useFirebase){
+      const b = document.createElement('div');
+      b.style.cssText = 'background:#B3382C;color:#fff;text-align:center;padding:9px 14px;'
+        + 'font:600 12.5px Inter,sans-serif;letter-spacing:.01em;position:relative;z-index:9999;';
+      b.textContent = '⚠ Modo local de prueba: los datos solo se guardan en este navegador y no se comparten entre docente y estudiantes. Configura Firebase (ver README.md) antes de aplicar pruebas reales.';
+      document.body.prepend(b);
+    }
+  });
+})();
+
+</script>
+<style>
+:root{
+  --navy:#12233F;
+  --navy-deep:#0A1728;
+  --steel:#2C6E91;
+  --steel-soft:#DCE9EF;
+  --gold:#C4923A;
+  --gold-soft:#F3E3C4;
+  --paper:#F6F3EC;
+  --paper-line:#E3DDCC;
+  --ink:#1B1B1B;
+  --ink-soft:#5B5F66;
+  --success:#2F7D4F;
+  --success-soft:#E1EFE5;
+  --danger:#B3382C;
+  --danger-soft:#F7E3DF;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:'Inter',sans-serif;
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh;
+}
+body::before{
+  content:"";
+  position:fixed; inset:0;
+  background-image:
+    linear-gradient(var(--paper-line) 1px, transparent 1px);
+  background-size: 100% 42px;
+  opacity:.35;
+  pointer-events:none;
+  z-index:0;
+}
+#app{position:relative; z-index:1; min-height:100vh; display:flex; flex-direction:column;}
+h1,h2,h3,h4{font-family:'Source Serif 4',serif; margin:0; color:var(--navy-deep);}
+.mono{font-family:'IBM Plex Mono',monospace; letter-spacing:.02em;}
+a{color:var(--steel);}
+button{font-family:inherit; cursor:pointer;}
+input,select,textarea{font-family:inherit;}
+
+/* ---------- top bar ---------- */
+.topbar{
+  background:var(--navy-deep);
+  color:#EDE8DA;
+  padding:10px 24px;
+  display:flex; align-items:center; justify-content:space-between;
+  font-size:12.5px;
+  letter-spacing:.04em;
+}
+.topbar .route{
+  display:flex; align-items:center; gap:8px;
+  font-family:'IBM Plex Mono',monospace;
+  color:#B9C4D6;
+}
+.topbar .route .dot{width:5px;height:5px;border-radius:50%;background:var(--gold);}
+.topbar button.link-btn{
+  background:none;border:1px solid #3A4A66;color:#DCE3EE;
+  padding:5px 12px;border-radius:20px;font-size:12px;
+}
+.topbar button.link-btn:hover{border-color:var(--gold);color:var(--gold);}
+
+/* ---------- header institucional (manifiesto) ---------- */
+.manifest-header{
+  background:linear-gradient(180deg, var(--navy) 0%, var(--navy-deep) 100%);
+  color:#fff;
+  padding:34px 28px 26px;
+  position:relative;
+  overflow:hidden;
+}
+.manifest-header::after{
+  content:"";
+  position:absolute; left:0; right:0; bottom:0; height:6px;
+  background:repeating-linear-gradient(90deg, var(--gold) 0 14px, transparent 14px 22px);
+}
+.manifest-header .eyebrow{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:11px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--gold-soft); opacity:.85; margin-bottom:10px;
+}
+.manifest-header .inst{max-width:760px; margin:0 auto; text-align:center;}
+.manifest-header .inst p{margin:2px 0; font-size:13.5px; color:#CBD5E3;}
+.manifest-header .inst p.top{font-size:14.5px; font-weight:600; color:#fff; letter-spacing:.01em;}
+.manifest-header h1{color:#fff; font-size:22px; margin-top:10px; font-weight:600;}
+.manifest-header .subject{
+  display:inline-block; margin-top:8px; font-size:12.5px;
+  border:1px solid #3A4A66; padding:5px 14px; border-radius:20px; color:var(--gold-soft);
+  font-family:'IBM Plex Mono',monospace; letter-spacing:.03em;
+}
+
+/* ---------- shell / layout ---------- */
+.shell{flex:1; width:100%; max-width:980px; margin:0 auto; padding:30px 22px 70px;}
+.shell.wide{max-width:1180px;}
+.card{
+  background:#fff;
+  border:1px solid var(--paper-line);
+  border-radius:var(--radius);
+  padding:26px;
+  box-shadow:0 1px 2px rgba(18,35,63,.04);
+  margin-bottom:20px;
+}
+.card + .card{margin-top:0;}
+.section-label{
+  font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--steel); margin-bottom:6px; display:block;
+}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+@media(max-width:640px){.grid2{grid-template-columns:1fr;}}
+
+label.field-label{display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-bottom:5px;}
+input[type=text],input[type=password],input[type=date],input[type=number],select,textarea{
+  width:100%; padding:10px 12px; border:1.5px solid #D9D3C3; border-radius:8px;
+  font-size:14.5px; color:var(--ink); background:#FCFBF8; transition:border-color .15s;
+}
+input:focus,select:focus,textarea:focus{outline:none; border-color:var(--steel); background:#fff;}
+textarea{resize:vertical; min-height:90px; font-family:'IBM Plex Mono',monospace; font-size:13px;}
+
+.btn{
+  display:inline-flex; align-items:center; gap:8px; justify-content:center;
+  padding:11px 20px; border-radius:8px; border:none; font-weight:600; font-size:14px;
+  transition:transform .08s, box-shadow .15s;
+}
+.btn:active{transform:translateY(1px);}
+.btn-primary{background:var(--navy); color:#fff;}
+.btn-primary:hover{background:var(--navy-deep);}
+.btn-gold{background:var(--gold); color:#2A1E08;}
+.btn-gold:hover{filter:brightness(1.06);}
+.btn-ghost{background:#fff; border:1.5px solid #D9D3C3; color:var(--ink);}
+.btn-ghost:hover{border-color:var(--steel); color:var(--steel);}
+.btn-danger{background:var(--danger); color:#fff;}
+.btn-block{width:100%;}
+.btn:disabled{opacity:.45; cursor:not-allowed;}
+.btn-sm{padding:6px 12px; font-size:12.5px; border-radius:6px;}
+
+.role-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:26px;}
+@media(max-width:640px){.role-grid{grid-template-columns:1fr;}}
+.role-card{
+  background:#fff; border:1.5px solid var(--paper-line); border-radius:14px; padding:28px 24px;
+  cursor:pointer; transition:border-color .15s, transform .1s;
+  text-align:left;
+}
+.role-card:hover{border-color:var(--gold); transform:translateY(-2px);}
+.role-card .tag{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--gold); letter-spacing:.1em; text-transform:uppercase;}
+.role-card h3{margin-top:10px; font-size:20px;}
+.role-card p{color:var(--ink-soft); font-size:13.5px; line-height:1.5; margin-top:8px;}
+
+/* waybill-style landing hero */
+.hero-ticket{
+  background:#fff; border:1.5px dashed #C9C2AC; border-radius:14px; padding:24px 26px;
+  display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;
+}
+.hero-ticket .lane{flex:1; min-width:220px;}
+.hero-ticket .lane .k{font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-soft); letter-spacing:.1em; text-transform:uppercase;}
+.hero-ticket .lane .v{font-size:14px; margin-top:3px; font-weight:600;}
+
+/* alert / notice boxes */
+.notice{border-radius:8px; padding:14px 16px; font-size:13.5px; line-height:1.55; border:1px solid transparent;}
+.notice.warn{background:var(--gold-soft); border-color:#E3C688; color:#5C4113;}
+.notice.danger{background:var(--danger-soft); border-color:#E4B3A9; color:#7A231A;}
+.notice.info{background:var(--steel-soft); border-color:#B7D1DE; color:#1D4B62;}
+.notice.success{background:var(--success-soft); border-color:#B6DAC1; color:#1F5C39;}
+.notice ul{margin:8px 0 0 18px; padding:0;}
+.notice li{margin-bottom:3px;}
+
+/* code chip */
+.code-chip{
+  display:inline-flex; align-items:center; gap:10px;
+  background:var(--navy-deep); color:var(--gold-soft);
+  font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.08em;
+  padding:9px 16px; border-radius:8px;
+}
+.code-chip .bars{display:flex; gap:2px; align-items:flex-end;}
+.code-chip .bars span{display:block; width:2px; background:var(--gold);}
+
+/* route progress (question stepper) */
+.route-track{display:flex; align-items:center; gap:0; margin:4px 0 22px; overflow-x:auto; padding-bottom:4px;}
+.route-track .wp{
+  width:28px; height:28px; min-width:28px; border-radius:50%; background:#EDE9DD; color:var(--ink-soft);
+  display:flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:700;
+  font-family:'IBM Plex Mono',monospace; border:2px solid #EDE9DD; z-index:1;
+}
+.route-track .wp.done{background:var(--steel); border-color:var(--steel); color:#fff;}
+.route-track .wp.active{background:var(--gold); border-color:var(--gold); color:#2A1E08;}
+.route-track .seg{flex:1; height:2px; background:#EDE9DD; min-width:14px;}
+.route-track .seg.done{background:var(--steel);}
+
+.qtimer{
+  font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink-soft);
+  display:flex; align-items:center; gap:6px;
+}
+.qtimer .led{width:7px;height:7px;border-radius:50%; background:var(--danger); animation:pulse 1.4s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+.opt-row{
+  display:flex; align-items:flex-start; gap:12px; padding:12px 14px; border:1.5px solid #E4DFD1;
+  border-radius:8px; margin-bottom:9px; cursor:pointer; transition:border-color .12s, background .12s;
+}
+.opt-row:hover{border-color:var(--steel);}
+.opt-row.selected{border-color:var(--steel); background:var(--steel-soft);}
+.opt-row input{margin-top:3px;}
+.opt-row .letter{
+  font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:12px; color:var(--steel);
+  border:1.5px solid var(--steel); width:22px; height:22px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+
+table.report{width:100%; border-collapse:collapse; font-size:13.5px;}
+table.report th{
+  text-align:left; font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--ink-soft); border-bottom:2px solid var(--navy); padding:8px 10px;
+}
+table.report td{padding:9px 10px; border-bottom:1px solid var(--paper-line); vertical-align:top;}
+table.report tr:hover td{background:#FBF9F4;}
+.badge{display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:700; letter-spacing:.02em;}
+.badge.ok{background:var(--success-soft); color:var(--success);}
+.badge.bad{background:var(--danger-soft); color:var(--danger);}
+.badge.progress{background:var(--gold-soft); color:#6B4B15;}
+
+.score-hero{text-align:center; padding:34px 20px;}
+.score-hero .ring{
+  width:140px; height:140px; border-radius:50%; margin:0 auto 14px;
+  display:flex; align-items:center; justify-content:center; flex-direction:column;
+  background:conic-gradient(var(--steel) calc(var(--pct)*1%), #EDE9DD 0);
+}
+.score-hero .ring .inner{
+  width:112px; height:112px; border-radius:50%; background:#fff;
+  display:flex; align-items:center; justify-content:center; flex-direction:column;
+}
+.score-hero .ring .num{font-family:'Source Serif 4',serif; font-size:34px; color:var(--navy-deep); font-weight:700; line-height:1;}
+.score-hero .ring .of{font-size:11px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace;}
+
+.qa-review{border:1px solid var(--paper-line); border-radius:8px; padding:14px 16px; margin-bottom:10px;}
+.qa-review.correct{border-left:4px solid var(--success);}
+.qa-review.incorrect{border-left:4px solid var(--danger);}
+.qa-review .qtext{font-weight:600; font-size:14px; margin-bottom:8px;}
+.qa-review .arow{font-size:13px; margin:3px 0; color:var(--ink-soft);}
+.qa-review .arow b{color:var(--ink); font-weight:600;}
+
+.footer-note{text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px; font-family:'IBM Plex Mono',monospace; letter-spacing:.03em;}
+@media print{
+  .topbar, .no-print, .footer-note{display:none !important;}
+  body::before{display:none;}
+  .card{box-shadow:none; border:1px solid #ccc;}
+}
+
+.q-editor{border:1px solid var(--paper-line); border-radius:8px; padding:16px; margin-bottom:14px; background:#FBF9F4;}
+.q-editor .row-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;}
+.q-editor .idx{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--steel); font-weight:700;}
+.opt-edit-row{display:flex; gap:8px; align-items:center; margin-bottom:6px;}
+.opt-edit-row input[type=text]{flex:1;}
+.small-x{background:none; border:none; color:var(--danger); font-size:16px; padding:2px 8px;}
+
+.tabs{display:flex; gap:4px; margin-bottom:18px; border-bottom:1.5px solid var(--paper-line);}
+.tab-btn{background:none; border:none; padding:10px 4px; margin-right:22px; font-weight:600; font-size:14px;
+  color:var(--ink-soft); border-bottom:2.5px solid transparent; margin-bottom:-1.5px;}
+.tab-btn.active{color:var(--navy-deep); border-color:var(--gold);}
+
+.empty-state{text-align:center; padding:40px 20px; color:var(--ink-soft);}
+.empty-state h3{color:var(--ink-soft); margin-bottom:6px;}
+
+.help-block{background:#FBF9F4; border:1px dashed #D9D3C3; border-radius:8px; padding:14px 16px; font-size:12.5px; color:var(--ink-soft); line-height:1.6;}
+.help-block pre{background:#12233F; color:#DCE9EF; padding:12px; border-radius:6px; overflow-x:auto; font-size:11.5px; line-height:1.6;}
+.flex-between{display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;}
+.muted{color:var(--ink-soft); font-size:13px;}
+hr.divider{border:none; border-top:1px solid var(--paper-line); margin:20px 0;}
+.pill{display:inline-block; padding:4px 11px; border-radius:20px; font-size:11.5px; font-family:'IBM Plex Mono',monospace; background:var(--steel-soft); color:var(--steel);}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* =========================================================================
+   MANIFIESTO DE EVALUACIÓN — Pruebas Cortas y Parcial Integrador
+   Asignatura: Logística Internacional — Universidad de Panamá / CRUV
+   ========================================================================= */
+
+const APP = {
+  view: 'home',
+  ctx: {},          // datos temporales de navegación
+  docenteAuth: false,
+};
+
+const PIN_DOCENTE = 'CRUV-2026'; // PIN de acceso al panel docente
+
+const ENCABEZADO = {
+  linea1: 'Universidad de Panamá',
+  linea2: 'Centro Regional Universitario de Veraguas',
+  linea3: 'Facultad de Administración de Empresas y Contabilidad',
+  linea4: 'Licenciatura en Ingeniería de Operaciones y Logística Empresarial',
+  linea5: 'Asignatura: Logística Internacional'
+};
+
+/* ---------------------------- almacenamiento ---------------------------- */
+async function stGet(key){
+  try{ const r = await window.storage.get(key, true); return r ? JSON.parse(r.value) : null; }
+  catch(e){ return null; }
+}
+async function stSet(key, value){
+  try{ const r = await window.storage.set(key, JSON.stringify(value), true); return !!r; }
+  catch(e){ console.error('storage set error', e); return false; }
+}
+async function stList(prefix){
+  try{ const r = await window.storage.list(prefix, true); return r ? r.keys : []; }
+  catch(e){ return []; }
+}
+async function stDelete(key){
+  try{ await window.storage.delete(key, true); }catch(e){}
+}
+
+/* --------------------------------- utils --------------------------------- */
+function uid(n=6){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s=''; for(let i=0;i<n;i++) s+=chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+function genCodigo(modulo){
+  const pre = (modulo||'LOG').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'LOG';
+  return pre + '-' + uid(5);
+}
+function hashSeed(str){
+  let h = 2166136261;
+  for(let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h,16777619); }
+  return h>>>0;
+}
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+}
+function shuffleSeeded(arr, seedStr){
+  const rnd = mulberry32(hashSeed(seedStr));
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(rnd()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function nowTimeStr(){ return new Date().toLocaleTimeString('es-PA',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+function fmtDuration(sec){
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  if(h>0) return `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+  return `${m}m ${String(s).padStart(2,'0')}s`;
+}
+function esc(str){
+  return String(str==null?'':str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function normText(s){
+  return String(s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+}
+
+/* ---------------------- parser de documento de preguntas ---------------------- */
+// Formato admitido (texto plano, separado por bloques):
+// MODULO: ...
+// TIPO: prueba_corta | parcial
+// INSTRUCCIONES: ...
+// PREGUNTA: ...
+// TIPO_PREGUNTA: seleccion | vf | corta
+// PUNTOS: 10        (opcional)
+// OPCION: ...        (solo para seleccion, repetir por cada opción)
+// RESPUESTA: ...
+function parseDocumento(text){
+  const lines = text.split(/\r?\n/);
+  const meta = { modulo:'', tipoPrueba:'prueba_corta', instrucciones:'' };
+  const preguntas = [];
+  let cur = null;
+
+  function pushCur(){
+    if(cur && cur.texto){ preguntas.push(cur); }
+    cur = null;
+  }
+
+  for(let raw of lines){
+    const line = raw.trim();
+    if(!line) continue;
+    const m = line.match(/^([A-Za-zÁÉÍÓÚÑ_]+)\s*:\s*(.*)$/);
+    if(!m){ continue; }
+    const key = m[1].toUpperCase();
+    const val = m[2].trim();
+    switch(key){
+      case 'MODULO': meta.modulo = val; break;
+      case 'TIPO':
+        meta.tipoPrueba = /parcial/i.test(val) ? 'parcial' : 'prueba_corta';
+        break;
+      case 'INSTRUCCIONES': meta.instrucciones = val; break;
+      case 'PREGUNTA':
+        pushCur();
+        cur = { id: uid(8), texto: val, tipo:'seleccion', puntos:null, opciones:[], respuesta:'' };
+        break;
+      case 'TIPO_PREGUNTA':
+        if(cur){
+          const v = val.toLowerCase();
+          cur.tipo = v.startsWith('v') ? 'vf' : (v.startsWith('c') ? 'corta' : 'seleccion');
+        }
+        break;
+      case 'PUNTOS':
+        if(cur) cur.puntos = parseFloat(val) || null;
+        break;
+      case 'OPCION':
+        if(cur) cur.opciones.push(val);
+        break;
+      case 'RESPUESTA':
+        if(cur) cur.respuesta = val;
+        break;
+      default: break;
+    }
+  }
+  pushCur();
+
+  // normalizar V/F opciones
+  preguntas.forEach(p=>{
+    if(p.tipo==='vf'){ p.opciones = ['Verdadero','Falso']; }
+  });
+
+  return { meta, preguntas };
+}
+
+function repartirPuntos(preguntas){
+  const conPuntos = preguntas.filter(p=>p.puntos);
+  const sinPuntos = preguntas.filter(p=>!p.puntos);
+  let usados = conPuntos.reduce((a,p)=>a+p.puntos,0);
+  if(sinPuntos.length){
+    const restante = Math.max(0, 100 - usados);
+    const cada = Math.round((restante / sinPuntos.length) * 100) / 100;
+    sinPuntos.forEach((p,i)=>{ p.puntos = (i===sinPuntos.length-1) ? Math.round((restante - cada*(sinPuntos.length-1))*100)/100 : cada; });
+  }
+  return preguntas;
+}
+
+/* ------------------------------- calificación ------------------------------- */
+function evaluarRespuesta(pregunta, respuestaEstudiante){
+  if(pregunta.tipo==='corta'){
+    return normText(respuestaEstudiante) !== '' && normText(respuestaEstudiante) === normText(pregunta.respuesta)
+      ? true
+      : (normText(pregunta.respuesta).length>0 && normText(respuestaEstudiante).includes(normText(pregunta.respuesta)));
+  }
+  return normText(respuestaEstudiante) === normText(pregunta.respuesta);
+}
+
+/* =============================== render root =============================== */
+function render(){
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  app.appendChild(TopBar());
+  const views = {
+    home: ViewHome,
+    docenteLogin: ViewDocenteLogin,
+    docenteDashboard: ViewDocenteDashboard,
+    docenteCrear: ViewDocenteCrear,
+    docenteReporte: ViewDocenteReporte,
+    estAcceso: ViewEstAcceso,
+    estDatos: ViewEstDatos,
+    estPrueba: ViewEstPrueba,
+    estResultado: ViewEstResultado,
+    estBloqueado: ViewEstBloqueado,
+  };
+  const fn = views[APP.view] || ViewHome;
+  app.appendChild(fn());
+  const foot = document.createElement('div');
+  foot.className='footer-note';
+  foot.textContent='Sistema de Evaluación Digital · Logística Internacional · Universidad de Panamá — CRUV';
+  app.appendChild(foot);
+}
+
+function TopBar(){
+  const bar = document.createElement('div');
+  bar.className='topbar';
+  const routeText = ({
+    home:'inicio', docenteLogin:'docente / acceso', docenteDashboard:'docente / panel',
+    docenteCrear:'docente / nueva prueba', docenteReporte:'docente / informe',
+    estAcceso:'estudiante / acceso', estDatos:'estudiante / datos', estPrueba:'estudiante / en curso',
+    estResultado:'estudiante / resultado', estBloqueado:'estudiante / bloqueado'
+  })[APP.view] || 'inicio';
+  bar.innerHTML = `
+    <div class="route"><span class="dot"></span><span>manifiesto-eval</span><span>/</span><span>${routeText}</span></div>
+    <div></div>`;
+  const btnWrap = document.createElement('div');
+  if(APP.view !== 'home' && APP.view !== 'estPrueba'){
+    const b = document.createElement('button');
+    b.className='link-btn';
+    b.textContent='◂ Inicio';
+    b.onclick = ()=>{ APP.view='home'; APP.ctx={}; render(); };
+    btnWrap.appendChild(b);
+  }
+  bar.lastElementChild.replaceWith(btnWrap);
+  return bar;
+}
+
+function ManifestHeader(sub){
+  const wrap = document.createElement('div');
+  wrap.className='manifest-header';
+  wrap.innerHTML = `
+    <div class="eyebrow">Manifiesto de Evaluación Académica</div>
+    <div class="inst">
+      <p class="top">${ENCABEZADO.linea1}</p>
+      <p>${ENCABEZADO.linea2}</p>
+      <p>${ENCABEZADO.linea3}</p>
+      <p>${ENCABEZADO.linea4}</p>
+      <p style="margin-top:8px; color:var(--gold-soft); font-weight:600;">${ENCABEZADO.linea5}</p>
+      ${sub ? `<div class="subject">${esc(sub)}</div>` : ''}
+    </div>`;
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: HOME                                                            */
+/* ===================================================================== */
+function ViewHome(){
+  const wrap = document.createElement('div');
+  wrap.appendChild(ManifestHeader());
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.innerHTML = `
+    <div class="hero-ticket">
+      <div class="lane">
+        <div class="k">Sistema</div>
+        <div class="v">Generador de Pruebas Cortas &amp; Parcial Integrador</div>
+      </div>
+      <div class="lane">
+        <div class="k">Corrección</div>
+        <div class="v">Automática · retroalimentación inmediata</div>
+      </div>
+      <div class="lane">
+        <div class="k">Integridad</div>
+        <div class="v">Bloqueo por abandono de pantalla</div>
+      </div>
+    </div>
+    <div class="role-grid">
+      <div class="role-card" id="cardDocente">
+        <div class="tag">Panel del docente</div>
+        <h3>Crear y administrar pruebas</h3>
+        <p>Suba el documento de preguntas por módulo, genere el código de acceso único de la prueba y consulte el informe de calificaciones y tiempos de cada estudiante.</p>
+      </div>
+      <div class="role-card" id="cardEstudiante">
+        <div class="tag">Acceso del estudiante</div>
+        <h3>Presentar una prueba</h3>
+        <p>Ingrese el código de acceso compartido por su docente, complete sus datos y responda la prueba. Recibirá su calificación y retroalimentación al instante.</p>
+      </div>
+    </div>
+  `;
+  wrap.appendChild(shell);
+  setTimeout(()=>{
+    document.getElementById('cardDocente').onclick=()=>{ APP.view='docenteLogin'; render(); };
+    document.getElementById('cardEstudiante').onclick=()=>{ APP.view='estAcceso'; render(); };
+  });
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: DOCENTE LOGIN                                                   */
+/* ===================================================================== */
+function ViewDocenteLogin(){
+  const wrap = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.style.maxWidth='460px';
+  shell.innerHTML = `
+    <div class="card">
+      <span class="section-label">Acceso restringido</span>
+      <h2 style="font-size:20px; margin-bottom:14px;">Panel del Docente</h2>
+      <p class="muted" style="margin-bottom:18px;">Ingrese el código de acceso docente para crear pruebas y consultar informes de calificación.</p>
+      <label class="field-label">Código de acceso</label>
+      <input type="password" id="pinInput" placeholder="•••••••••" />
+      <div id="pinError" class="notice danger" style="display:none; margin-top:10px;">Código incorrecto. Intente nuevamente.</div>
+      <button class="btn btn-primary btn-block" id="pinBtn" style="margin-top:16px;">Ingresar al panel</button>
+      <div class="help-block" style="margin-top:18px;">
+        El código de acceso docente por defecto de esta instalación es <b class="mono">${PIN_DOCENTE}</b>. Puede cambiarlo directamente en el código fuente de la aplicación (constante <span class="mono">PIN_DOCENTE</span>) antes de compartirla con otros profesores.
+      </div>
+    </div>
+  `;
+  wrap.appendChild(shell);
+  setTimeout(()=>{
+    const btn=document.getElementById('pinBtn');
+    const input=document.getElementById('pinInput');
+    const tryLogin=()=>{
+      if(input.value.trim()===PIN_DOCENTE){
+        APP.docenteAuth=true; APP.view='docenteDashboard'; render();
+      } else {
+        document.getElementById('pinError').style.display='block';
+      }
+    };
+    btn.onclick=tryLogin;
+    input.addEventListener('keydown', e=>{ if(e.key==='Enter') tryLogin(); });
+    input.focus();
+  });
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: DOCENTE DASHBOARD                                               */
+/* ===================================================================== */
+function ViewDocenteDashboard(){
+  if(!APP.docenteAuth){ APP.view='docenteLogin'; setTimeout(render); return document.createElement('div'); }
+  const wrap = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.className='shell wide';
+  shell.innerHTML = `
+    <div class="flex-between" style="margin-bottom:18px;">
+      <div>
+        <span class="section-label">Panel docente</span>
+        <h2 style="font-size:22px;">Pruebas creadas</h2>
+        <p class="muted" style="margin-top:4px;">Aquí puedes crear una nueva prueba y consultar el informe de calificaciones de cada una.</p>
+      </div>
+      <button class="btn btn-gold" id="btnNueva">+ Nueva prueba</button>
+    </div>
+    <div id="listaPruebas" class="card"><p class="muted">Cargando pruebas…</p></div>
+  `;
+  wrap.appendChild(shell);
+  setTimeout(async ()=>{
+    document.getElementById('btnNueva').onclick=()=>{ APP.view='docenteCrear'; render(); };
+    const keys = await stList('test:');
+    const cont = document.getElementById('listaPruebas');
+    if(!keys.length){
+      cont.innerHTML = `<div class="empty-state"><h3>Aún no hay pruebas creadas</h3><p>Use "+ Nueva prueba" para subir el documento de preguntas de un módulo y generar el código de acceso.</p></div>`;
+      return;
+    }
+    const tests = (await Promise.all(keys.map(k=>stGet(k)))).filter(Boolean).sort((a,b)=>b.creado-a.creado);
+    // estadísticas rápidas por prueba: cantidad de intentos y promedio del grupo
+    const stats = await Promise.all(tests.map(async t=>{
+      const akeys = await stList('intento:'+t.id+':');
+      const intentos = (await Promise.all(akeys.map(k=>stGet(k)))).filter(Boolean);
+      const finalizados = intentos.filter(a=>a.estado==='finalizado');
+      const anulados = intentos.filter(a=>a.estado==='anulado');
+      const promedio = finalizados.length ? finalizados.reduce((s,a)=>s+(a.calificacion||0),0)/finalizados.length : null;
+      return { total: intentos.length, finalizados: finalizados.length, anulados: anulados.length, promedio };
+    }));
+    cont.innerHTML = `<table class="report"><thead><tr>
+      <th>Módulo</th><th>Tipo</th><th>Código</th><th>Preguntas</th><th>Intentos</th><th>Promedio</th><th>Creado</th><th></th>
+    </tr></thead><tbody>
+      ${tests.map((t,i)=>{
+        const s = stats[i];
+        const promTxt = s.promedio!=null ? s.promedio.toFixed(1) : '—';
+        return `<tr>
+          <td><b>${esc(t.modulo)}</b><br><span class="muted">${esc(t.titulo||'')}</span></td>
+          <td><span class="pill">${t.tipoPrueba==='parcial'?'Parcial Integrador':'Prueba Corta'}</span></td>
+          <td><span class="mono">${esc(t.codigo)}</span></td>
+          <td>${t.preguntas.length}</td>
+          <td>${s.total ? `${s.finalizados} finalizado(s)${s.anulados?` · ${s.anulados} anulado(s)`:''}` : '<span class="muted">sin intentos</span>'}</td>
+          <td><b>${promTxt}</b>${s.promedio!=null?' / 100':''}</td>
+          <td class="muted">${new Date(t.creado).toLocaleDateString('es-PA')}</td>
+          <td style="text-align:right; white-space:nowrap;">
+            <button class="btn btn-primary btn-sm" data-report="${t.id}">📊 Ver calificaciones</button>
+            <button class="btn btn-ghost btn-sm" data-link="${t.codigo}">Copiar código</button>
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>`;
+    cont.querySelectorAll('[data-report]').forEach(b=>{
+      b.onclick=()=>{ APP.ctx.testId=b.getAttribute('data-report'); APP.view='docenteReporte'; render(); };
+    });
+    cont.querySelectorAll('[data-link]').forEach(b=>{
+      b.onclick=()=>{
+        const codigo=b.getAttribute('data-link');
+        const url = location.href.split('#')[0] + '#codigo=' + codigo;
+        navigator.clipboard && navigator.clipboard.writeText(url).catch(()=>{});
+        b.textContent='¡Copiado!';
+        setTimeout(()=>{ b.textContent='Copiar código'; },1400);
+      };
+    });
+  });
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: DOCENTE CREAR PRUEBA                                            */
+/* ===================================================================== */
+function ViewDocenteCrear(){
+  if(!APP.docenteAuth){ APP.view='docenteLogin'; setTimeout(render); return document.createElement('div'); }
+  if(!APP.ctx.draft){
+    APP.ctx.draft = { modulo:'', titulo:'', tipoPrueba:'prueba_corta', instrucciones:'', preguntas:[] };
+  }
+  const d = APP.ctx.draft;
+  const wrap = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.innerHTML = `
+    <span class="section-label">Nueva prueba</span>
+    <h2 style="font-size:22px; margin-bottom:16px;">Configurar prueba del módulo</h2>
+
+    <div class="card">
+      <div class="grid2">
+        <div>
+          <label class="field-label">Módulo</label>
+          <input type="text" id="fModulo" placeholder="Ej: Incoterms y Contratos Internacionales" value="${esc(d.modulo)}">
+        </div>
+        <div>
+          <label class="field-label">Tipo de prueba</label>
+          <select id="fTipo">
+            <option value="prueba_corta" ${d.tipoPrueba==='prueba_corta'?'selected':''}>Prueba Corta</option>
+            <option value="parcial" ${d.tipoPrueba==='parcial'?'selected':''}>Parcial Integrador</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:14px;">
+        <label class="field-label">Título visible de la prueba</label>
+        <input type="text" id="fTitulo" placeholder="Ej: Prueba Corta N.º 2 — Incoterms" value="${esc(d.titulo)}">
+      </div>
+      <div style="margin-top:14px;">
+        <label class="field-label">Instrucciones para el estudiante</label>
+        <textarea id="fInstrucciones" style="font-family:'Inter',sans-serif; min-height:70px;" placeholder="Ej: Lea cuidadosamente cada pregunta. Cuenta con un intento único. No abandone la pantalla durante la prueba.">${esc(d.instrucciones)}</textarea>
+      </div>
+      <p class="muted" style="margin-top:8px;">El valor total de la prueba es fijo: <b>100 puntos</b>, distribuidos automáticamente entre las preguntas cargadas (o según los puntos indicados en el documento).</p>
+    </div>
+
+    <div class="card">
+      <div class="flex-between">
+        <span class="section-label" style="margin-bottom:0;">Preguntas del módulo</span>
+        <div>
+          <label class="btn btn-ghost btn-sm" for="fileInput" style="margin-right:8px;">📎 Subir documento (.docx / .txt)</label>
+          <input type="file" id="fileInput" accept=".docx,.txt" style="display:none;">
+          <button class="btn btn-ghost btn-sm" id="btnAddManual">+ Agregar pregunta manual</button>
+        </div>
+      </div>
+      <div id="uploadStatus"></div>
+      <details style="margin-top:12px;">
+        <summary class="muted" style="cursor:pointer;">Ver formato del documento a subir</summary>
+        <div class="help-block" style="margin-top:8px;">
+          Suba un archivo <b>.docx</b> o <b>.txt</b> siguiendo esta estructura por cada pregunta. Puede incluir varias preguntas en el mismo documento.
+<pre>MODULO: Incoterms y Contratos Internacionales
+TIPO: prueba_corta
+INSTRUCCIONES: Lea cada pregunta y responda con cuidado.
+
+PREGUNTA: ¿Qué significa el incoterm FOB?
+TIPO_PREGUNTA: seleccion
+PUNTOS: 10
+OPCION: Free On Board
+OPCION: Free On Truck
+OPCION: Freight On Board
+RESPUESTA: Free On Board
+
+PREGUNTA: El EXW implica mayor responsabilidad para el comprador que el DDP.
+TIPO_PREGUNTA: vf
+PUNTOS: 10
+RESPUESTA: verdadero
+
+PREGUNTA: Mencione un documento esencial en una exportación marítima.
+TIPO_PREGUNTA: corta
+PUNTOS: 10
+RESPUESTA: conocimiento de embarque</pre>
+          TIPO_PREGUNTA admite: <b>seleccion</b> (opción múltiple), <b>vf</b> (verdadero/falso), <b>corta</b> (respuesta corta, comparada con la respuesta indicada). Si omite PUNTOS, el sistema reparte 100 puntos equitativamente.
+        </div>
+      </details>
+      <div id="listaPreguntas" style="margin-top:16px;"></div>
+    </div>
+
+    <div class="flex-between">
+      <span class="muted" id="resumenPuntos"></span>
+      <button class="btn btn-primary" id="btnGenerar">Generar prueba y código de acceso</button>
+    </div>
+  `;
+  wrap.appendChild(shell);
+
+  setTimeout(()=>{
+    document.getElementById('fModulo').oninput = e=> d.modulo = e.target.value;
+    document.getElementById('fTitulo').oninput = e=> d.titulo = e.target.value;
+    document.getElementById('fTipo').onchange = e=> d.tipoPrueba = e.target.value;
+    document.getElementById('fInstrucciones').oninput = e=> d.instrucciones = e.target.value;
+    document.getElementById('btnAddManual').onclick = ()=>{
+      d.preguntas.push({ id:uid(8), texto:'', tipo:'seleccion', puntos:null, opciones:['',''], respuesta:'' });
+      renderListaPreguntas();
+    };
+    document.getElementById('fileInput').onchange = handleFile;
+    document.getElementById('btnGenerar').onclick = generarPrueba;
+    renderListaPreguntas();
+  });
+
+  async function handleFile(e){
+    const file = e.target.files[0];
+    if(!file) return;
+    const statusEl = document.getElementById('uploadStatus');
+    statusEl.innerHTML = `<p class="muted" style="margin-top:8px;">Procesando documento "${esc(file.name)}"…</p>`;
+    const esDocx = /\.docx$/i.test(file.name);
+    if(esDocx && (window.__MAMMOTH_FAILED || typeof mammoth === 'undefined')){
+      statusEl.innerHTML = `<div class="notice danger" style="margin-top:10px;">No se pudo cargar el componente para leer archivos .docx (posiblemente bloqueado por su red, firewall o un bloqueador de anuncios). Intente con un archivo <b>.txt</b> con el mismo formato, revise su conexión a internet, o agregue las preguntas manualmente abajo.</div>`;
+      return;
+    }
+    try{
+      let text = '';
+      if(esDocx){
+        const buf = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({arrayBuffer: buf});
+        text = result.value;
+      } else if(/\.txt$/i.test(file.name)){
+        text = await file.text();
+      } else {
+        statusEl.innerHTML = `<div class="notice warn" style="margin-top:10px;">Formato no admitido. Suba un archivo .docx o .txt.</div>`;
+        return;
+      }
+      const { meta, preguntas } = parseDocumento(text);
+      if(meta.modulo){ d.modulo = meta.modulo; const el=document.getElementById('fModulo'); if(el) el.value = meta.modulo; }
+      if(meta.instrucciones){ d.instrucciones = meta.instrucciones; const el=document.getElementById('fInstrucciones'); if(el) el.value = meta.instrucciones; }
+      if(meta.tipoPrueba){ d.tipoPrueba = meta.tipoPrueba; const el=document.getElementById('fTipo'); if(el) el.value = meta.tipoPrueba; }
+      if(preguntas.length){
+        d.preguntas = d.preguntas.concat(preguntas);
+        statusEl.innerHTML = `<div class="notice success" style="margin-top:10px;">Se importaron <b>${preguntas.length}</b> pregunta(s) del documento "${esc(file.name)}" correctamente.</div>`;
+        renderListaPreguntas();
+      } else {
+        statusEl.innerHTML = `<div class="notice warn" style="margin-top:10px;">El documento se leyó (${text.length} caracteres), pero no se detectaron preguntas con el formato esperado (etiquetas <span class="mono">PREGUNTA:</span>, <span class="mono">TIPO_PREGUNTA:</span>, <span class="mono">RESPUESTA:</span>, etc.). Revise el formato mostrado arriba, o agregue las preguntas manualmente.</div>`;
+      }
+      e.target.value = '';
+    }catch(err){
+      console.error('Error al procesar documento:', err);
+      statusEl.innerHTML = `<div class="notice danger" style="margin-top:10px;">No se pudo leer el documento: <span class="mono">${esc(err && err.message ? err.message : String(err))}</span>. Verifique que sea un .docx o .txt válido, o revise la consola del navegador (F12) para más detalles.</div>`;
+    }
+  }
+
+  function renderListaPreguntas(){
+    const cont = document.getElementById('listaPreguntas');
+    if(!cont) return;
+    if(!d.preguntas.length){
+      cont.innerHTML = `<p class="muted">No hay preguntas cargadas todavía. Suba un documento o agregue preguntas manualmente.</p>`;
+    } else {
+      cont.innerHTML = d.preguntas.map((p,i)=>QEditorHTML(p,i)).join('');
+      d.preguntas.forEach((p,i)=> bindQEditor(p,i));
+    }
+    const totalPuntos = d.preguntas.reduce((a,p)=>a+(p.puntos||0),0);
+    const resumen = document.getElementById('resumenPuntos');
+    if(resumen){
+      resumen.textContent = d.preguntas.length
+        ? `${d.preguntas.length} pregunta(s) · puntos asignados: ${totalPuntos || 'se repartirán 100 pts automáticamente'}`
+        : '';
+    }
+  }
+
+  function QEditorHTML(p,i){
+    return `<div class="q-editor" data-qi="${i}">
+      <div class="row-top">
+        <span class="idx">PREGUNTA ${String(i+1).padStart(2,'0')}</span>
+        <button class="small-x" data-del="${i}">✕ eliminar</button>
+      </div>
+      <label class="field-label">Enunciado</label>
+      <textarea data-f="texto" style="font-family:'Inter',sans-serif; min-height:50px;" placeholder="Escriba la pregunta...">${esc(p.texto)}</textarea>
+      <div class="grid2" style="margin-top:10px;">
+        <div>
+          <label class="field-label">Tipo</label>
+          <select data-f="tipo">
+            <option value="seleccion" ${p.tipo==='seleccion'?'selected':''}>Selección múltiple</option>
+            <option value="vf" ${p.tipo==='vf'?'selected':''}>Verdadero / Falso</option>
+            <option value="corta" ${p.tipo==='corta'?'selected':''}>Respuesta corta</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Puntos (opcional)</label>
+          <input type="number" min="0" step="0.5" data-f="puntos" value="${p.puntos||''}" placeholder="auto">
+        </div>
+      </div>
+      <div data-opts style="margin-top:10px;"></div>
+      <div style="margin-top:10px;">
+        <label class="field-label">Respuesta correcta</label>
+        ${p.tipo==='vf'
+          ? `<select data-f="respuesta">
+               <option value="Verdadero" ${p.respuesta==='Verdadero'?'selected':''}>Verdadero</option>
+               <option value="Falso" ${p.respuesta==='Falso'?'selected':''}>Falso</option>
+             </select>`
+          : `<input type="text" data-f="respuesta" value="${esc(p.respuesta)}" placeholder="${p.tipo==='corta'?'Texto esperado de la respuesta':'Debe coincidir con una de las opciones'}">`}
+      </div>
+    </div>`;
+  }
+
+  function bindQEditor(p,i){
+    const box = document.querySelector(`.q-editor[data-qi="${i}"]`);
+    if(!box) return;
+    box.querySelector('[data-del]').onclick = ()=>{ d.preguntas.splice(i,1); renderListaPreguntas(); };
+    box.querySelector('[data-f="texto"]').oninput = e=> p.texto = e.target.value;
+    box.querySelector('[data-f="puntos"]').oninput = e=> p.puntos = parseFloat(e.target.value)||null;
+    box.querySelector('[data-f="tipo"]').onchange = e=>{ p.tipo = e.target.value; if(p.tipo==='vf'){p.opciones=['Verdadero','Falso']; p.respuesta='Verdadero';} else if(p.tipo==='seleccion' && p.opciones.length<2){ p.opciones=['','']; } else if(p.tipo==='corta'){p.respuesta='';} renderListaPreguntas(); };
+    const respField = box.querySelector('[data-f="respuesta"]');
+    if(respField) respField.addEventListener(respField.tagName==='SELECT'?'change':'input', e=> p.respuesta = e.target.value);
+
+    const optsBox = box.querySelector('[data-opts]');
+    if(p.tipo==='seleccion'){
+      optsBox.innerHTML = `<label class="field-label">Opciones</label>` +
+        p.opciones.map((o,oi)=>`
+          <div class="opt-edit-row">
+            <input type="text" data-opt="${oi}" value="${esc(o)}" placeholder="Opción ${oi+1}">
+            <button class="small-x" data-optdel="${oi}">✕</button>
+          </div>`).join('') +
+        `<button class="btn btn-ghost btn-sm" data-optadd style="margin-top:4px;">+ opción</button>`;
+      optsBox.querySelectorAll('[data-opt]').forEach(inp=>{
+        inp.oninput = e=>{ p.opciones[+inp.getAttribute('data-opt')] = e.target.value; };
+      });
+      optsBox.querySelectorAll('[data-optdel]').forEach(btn=>{
+        btn.onclick = ()=>{ p.opciones.splice(+btn.getAttribute('data-optdel'),1); renderListaPreguntas(); };
+      });
+      const addBtn = optsBox.querySelector('[data-optadd]');
+      if(addBtn) addBtn.onclick = ()=>{ p.opciones.push(''); renderListaPreguntas(); };
+    } else {
+      optsBox.innerHTML = '';
+    }
+  }
+
+  async function generarPrueba(){
+    const errs = [];
+    if(!d.modulo.trim()) errs.push('Indique el módulo.');
+    if(!d.preguntas.length) errs.push('Agregue al menos una pregunta.');
+    d.preguntas.forEach((p,i)=>{
+      if(!p.texto.trim()) errs.push(`La pregunta ${i+1} no tiene enunciado.`);
+      if(!p.respuesta || !String(p.respuesta).trim()) errs.push(`La pregunta ${i+1} no tiene respuesta correcta definida.`);
+      if(p.tipo==='seleccion'){
+        const opts = p.opciones.filter(o=>o.trim());
+        if(opts.length<2) errs.push(`La pregunta ${i+1} necesita al menos 2 opciones.`);
+        else if(!opts.some(o=>normText(o)===normText(p.respuesta))) errs.push(`La respuesta de la pregunta ${i+1} debe coincidir con una de sus opciones.`);
+      }
+    });
+    if(errs.length){
+      alert('Revise lo siguiente antes de generar la prueba:\n\n- ' + errs.join('\n- '));
+      return;
+    }
+    const preguntasFinal = repartirPuntos(d.preguntas.map(p=>({...p, opciones: p.opciones ? p.opciones.filter(o=>o.trim()) : []})));
+    const test = {
+      id: uid(10),
+      modulo: d.modulo.trim(),
+      titulo: d.titulo.trim() || d.modulo.trim(),
+      tipoPrueba: d.tipoPrueba,
+      instrucciones: d.instrucciones.trim(),
+      preguntas: preguntasFinal,
+      valorTotal: 100,
+      codigo: genCodigo(d.modulo),
+      creado: Date.now(),
+      activo: true,
+    };
+    const btn = document.getElementById('btnGenerar');
+    if(btn){ btn.disabled = true; btn.textContent = 'Guardando…'; }
+    const guardado = await stSet('test:'+test.id, test);
+    if(!guardado){
+      if(btn){ btn.disabled = false; btn.textContent = 'Generar prueba y código de acceso'; }
+      alert('No se pudo guardar la prueba en el almacenamiento.\n\nEsto suele pasar cuando el archivo se abre directamente con doble clic (file://) en navegadores con políticas de privacidad o empresariales estrictas.\n\nSoluciones:\n1) Abra la app mediante un servidor local (por ejemplo "python -m http.server" y luego http://localhost:8000) en vez de doble clic.\n2) O configure Firebase (ver README.md) y pruebe la app ya publicada en su sitio — es la forma recomendada para uso real con estudiantes.');
+      return;
+    }
+    APP.ctx.draft = null;
+    APP.ctx.testId = test.id;
+    APP.ctx.nuevoCodigo = test.codigo;
+    APP.view='docenteReporte';
+    render();
+  }
+
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: DOCENTE REPORTE                                                 */
+/* ===================================================================== */
+function ViewDocenteReporte(){
+  if(!APP.docenteAuth){ APP.view='docenteLogin'; setTimeout(render); return document.createElement('div'); }
+  const wrap = document.createElement('div');
+  const shell = document.createElement('div');
+  shell.className='shell wide';
+  shell.innerHTML = `<div id="repRoot"><p class="muted">Cargando informe…</p></div>`;
+  wrap.appendChild(shell);
+
+  setTimeout(async ()=>{
+    const test = await stGet('test:'+APP.ctx.testId);
+    const root = document.getElementById('repRoot');
+    if(!test){ root.innerHTML = `<div class="notice danger">Prueba no encontrada.</div>`; return; }
+
+    const nuevoCodigoBanner = APP.ctx.nuevoCodigo ? `
+      <div class="notice success" style="margin-bottom:18px;">
+        Prueba generada correctamente. Comparta el siguiente código de acceso único con sus estudiantes:
+        <div style="margin-top:10px;"><span class="code-chip">${esc(test.codigo)} <span class="bars">${[6,10,4,8,5,9,3].map(h=>`<span style="height:${h}px;"></span>`).join('')}</span></span></div>
+        <div style="margin-top:10px;">Enlace directo: <span class="mono" id="linkDirecto" style="word-break:break-all;">${location.href.split('#')[0]}#codigo=${test.codigo}</span>
+        <button class="btn btn-ghost btn-sm" id="btnCopyLink" style="margin-left:8px;">Copiar</button></div>
+      </div>` : '';
+
+    const keys = await stList('intento:'+test.id+':');
+    const intentos = (await Promise.all(keys.map(k=>stGet(k)))).filter(Boolean);
+    intentos.sort((a,b)=>(b.horaInicioTs||0)-(a.horaInicioTs||0));
+
+    root.innerHTML = `
+      ${nuevoCodigoBanner}
+      <div class="flex-between">
+        <span class="section-label" style="margin-bottom:0;">Informe de calificaciones — solo visible para el docente</span>
+        <button class="btn btn-ghost btn-sm" id="btnVolverPanel">◂ Ver todas las pruebas</button>
+      </div>
+      <div class="flex-between" style="margin-bottom:10px; margin-top:6px;">
+        <h2 style="font-size:21px;">${esc(test.titulo)}</h2>
+        <span class="pill">${test.tipoPrueba==='parcial'?'Parcial Integrador':'Prueba Corta'} · Código ${esc(test.codigo)}</span>
+      </div>
+      <div class="card">
+        ${!intentos.length ? `<div class="empty-state"><h3>Sin intentos registrados</h3><p>Aún ningún estudiante ha presentado esta prueba.</p></div>` : `
+        <table class="report">
+          <thead><tr>
+            <th>Estudiante</th><th>Cédula</th><th>Fecha</th><th>Inicio</th><th>Fin</th>
+            <th>Duración total</th><th>Calificación</th><th>Estado</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${intentos.map((a,i)=>`
+              <tr>
+                <td><b>${esc(a.nombre)}</b></td>
+                <td class="mono">${esc(a.cedula)}</td>
+                <td>${esc(a.fecha)}</td>
+                <td class="mono">${esc(a.horaInicio||'—')}</td>
+                <td class="mono">${esc(a.horaFin||'—')}</td>
+                <td>${a.duracionSeg!=null ? fmtDuration(a.duracionSeg) : '—'}</td>
+                <td><b>${a.estado==='finalizado' ? (a.calificacion!=null?a.calificacion.toFixed(1):'—') : (a.estado==='anulado' ? '0.0' : '—')}</b> / 100</td>
+                <td>${a.estado==='finalizado' ? '<span class="badge ok">Finalizado</span>' : a.estado==='anulado' ? '<span class="badge bad">Anulado</span>' : '<span class="badge progress">En curso</span>'}</td>
+                <td><button class="btn btn-ghost btn-sm" data-det="${i}">Detalle</button></td>
+              </tr>
+              <tr id="det-${i}" style="display:none;"><td colspan="9">${DetalleIntentoHTML(a,test)}</td></tr>
+            `).join('')}
+          </tbody>
+        </table>`}
+      </div>
+      ${intentos.length ? `
+      <div class="card">
+        <span class="section-label">Estadísticas del grupo</span>
+        ${EstadisticasHTML(intentos)}
+      </div>` : ''}
+    `;
+
+    const copyBtn = document.getElementById('btnCopyLink');
+    if(copyBtn) copyBtn.onclick=()=>{
+      const t = document.getElementById('linkDirecto').textContent;
+      navigator.clipboard && navigator.clipboard.writeText(t).catch(()=>{});
+      copyBtn.textContent='¡Copiado!'; setTimeout(()=>copyBtn.textContent='Copiar',1400);
+    };
+    const volverBtn = document.getElementById('btnVolverPanel');
+    if(volverBtn) volverBtn.onclick = ()=>{ APP.ctx.nuevoCodigo=null; APP.view='docenteDashboard'; render(); };
+    root.querySelectorAll('[data-det]').forEach(b=>{
+      b.onclick=()=>{
+        const row = document.getElementById('det-'+b.getAttribute('data-det'));
+        row.style.display = row.style.display==='none' ? '' : 'none';
+      };
+    });
+  });
+
+  return wrap;
+}
+
+function EstadisticasHTML(intentos){
+  const finalizados = intentos.filter(a=>a.estado==='finalizado');
+  const anulados = intentos.filter(a=>a.estado==='anulado');
+  const promedio = finalizados.length ? (finalizados.reduce((s,a)=>s+(a.calificacion||0),0)/finalizados.length) : 0;
+  const durProm = finalizados.length ? (finalizados.reduce((s,a)=>s+(a.duracionSeg||0),0)/finalizados.length) : 0;
+  return `
+    <div class="grid2">
+      <div><div class="k mono" style="font-size:11px; color:var(--ink-soft);">PROMEDIO DEL GRUPO</div><div style="font-size:26px; font-weight:700; font-family:'Source Serif 4',serif;">${promedio.toFixed(1)} / 100</div></div>
+      <div><div class="k mono" style="font-size:11px; color:var(--ink-soft);">TIEMPO PROMEDIO</div><div style="font-size:26px; font-weight:700; font-family:'Source Serif 4',serif;">${fmtDuration(durProm)}</div></div>
+    </div>
+    <p class="muted" style="margin-top:12px;">${finalizados.length} finalizada(s) · ${anulados.length} anulada(s) por abandono de pantalla · ${intentos.length} intento(s) totales.</p>
+  `;
+}
+
+function DetalleIntentoHTML(a, test){
+  if(a.estado==='anulado'){
+    return `<div class="notice danger">Intento anulado: ${esc(a.motivoAnulacion||'el estudiante salió de la aplicación durante la prueba.')}</div>`;
+  }
+  if(!a.respuestas) return `<p class="muted">Sin respuestas registradas (intento en curso).</p>`;
+  return `<table class="report" style="margin-top:6px;">
+    <thead><tr><th>Pregunta</th><th>Respuesta del estudiante</th><th>Correcta</th><th>Puntos</th><th>Tiempo usado</th></tr></thead>
+    <tbody>
+    ${a.respuestas.map(r=>{
+      const preg = test.preguntas.find(p=>p.id===r.preguntaId);
+      const correcta = preg ? evaluarRespuesta(preg, r.respuesta) : false;
+      return `<tr>
+        <td>${esc(preg?preg.texto:'—')}</td>
+        <td>${esc(r.respuesta||'(sin responder)')}</td>
+        <td>${correcta?'<span class="badge ok">✓</span>':'<span class="badge bad">✗</span>'}</td>
+        <td>${correcta?(preg.puntos||0):0} / ${preg?preg.puntos:0}</td>
+        <td class="mono">${fmtDuration(r.tiempoSegundos||0)}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+/* ===================================================================== */
+/* VIEW: ESTUDIANTE — ACCESO POR CÓDIGO                                  */
+/* ===================================================================== */
+function ViewEstAcceso(){
+  const wrap = document.createElement('div');
+  wrap.appendChild(ManifestHeader());
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.style.maxWidth='480px';
+  const prellenado = APP.ctx.codigoPrellenado || '';
+  shell.innerHTML = `
+    <div class="card">
+      <span class="section-label">Acceso del estudiante</span>
+      <h2 style="font-size:20px; margin-bottom:14px;">Ingrese el código de la prueba</h2>
+      <p class="muted" style="margin-bottom:16px;">Escriba el código de acceso único compartido por su docente para esta prueba.</p>
+      <label class="field-label">Código de acceso</label>
+      <input type="text" id="codigoInput" class="mono" style="text-transform:uppercase;" placeholder="EJ: LOG-4F7K2" value="${esc(prellenado)}">
+      <div id="codeError" class="notice danger" style="display:none; margin-top:10px;"></div>
+      <button class="btn btn-primary btn-block" id="btnAcceder" style="margin-top:16px;">Continuar</button>
+    </div>
+  `;
+  wrap.appendChild(shell);
+  setTimeout(()=>{
+    const input = document.getElementById('codigoInput');
+    const tryAccess = async ()=>{
+      const codigo = input.value.trim().toUpperCase();
+      if(!codigo) return;
+      const keys = await stList('test:');
+      const tests = (await Promise.all(keys.map(k=>stGet(k)))).filter(Boolean);
+      const test = tests.find(t=>t.codigo===codigo);
+      const errBox = document.getElementById('codeError');
+      if(!test){
+        errBox.style.display='block';
+        errBox.textContent='El código ingresado no corresponde a ninguna prueba activa. Verifique con su docente.';
+        return;
+      }
+      APP.ctx.test = test;
+      APP.view='estDatos';
+      render();
+    };
+    document.getElementById('btnAcceder').onclick = tryAccess;
+    input.addEventListener('keydown', e=>{ if(e.key==='Enter') tryAccess(); });
+    if(prellenado) tryAccess();
+  });
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: ESTUDIANTE — DATOS PERSONALES                                   */
+/* ===================================================================== */
+function ViewEstDatos(){
+  const test = APP.ctx.test;
+  if(!test){ APP.view='estAcceso'; setTimeout(render); return document.createElement('div'); }
+  const wrap = document.createElement('div');
+  wrap.appendChild(ManifestHeader(test.titulo));
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.style.maxWidth='560px';
+  shell.innerHTML = `
+    <div class="card">
+      <div class="flex-between">
+        <span class="section-label" style="margin-bottom:0;">${test.tipoPrueba==='parcial'?'Parcial Integrador':'Prueba Corta'} · ${esc(test.modulo)}</span>
+        <span class="pill">Valor: 100 pts</span>
+      </div>
+      <h2 style="font-size:19px; margin-top:8px;">${esc(test.titulo)}</h2>
+
+      ${test.instrucciones ? `<div class="notice info" style="margin-top:14px;"><b>Instrucciones:</b> ${esc(test.instrucciones)}</div>` : ''}
+
+      <div class="notice warn" style="margin-top:12px;">
+        <b>Importante — integridad académica:</b>
+        <ul>
+          <li>Cuenta con un único intento para esta prueba.</li>
+          <li>Si sale de esta pantalla o cambia de aplicación mientras la prueba está en curso, su examen se anulará automáticamente con calificación <b>0</b> y el código dejará de funcionar para usted, sin afectar a los demás estudiantes.</li>
+          <li>Las preguntas y opciones se presentan en orden aleatorio.</li>
+          <li>Al finalizar recibirá su calificación y retroalimentación de inmediato.</li>
+        </ul>
+      </div>
+
+      <hr class="divider">
+      <div class="grid2">
+        <div>
+          <label class="field-label">Nombre completo</label>
+          <input type="text" id="fNombre" placeholder="Nombre y apellido">
+        </div>
+        <div>
+          <label class="field-label">Cédula de identidad personal</label>
+          <input type="text" id="fCedula" placeholder="Ej: 4-123-4567">
+        </div>
+      </div>
+      <div style="margin-top:14px;">
+        <label class="field-label">Fecha del examen</label>
+        <input type="date" id="fFecha" value="${todayISO()}">
+      </div>
+      <div id="datosError" class="notice danger" style="display:none; margin-top:12px;"></div>
+      <button class="btn btn-gold btn-block" id="btnEmpezar" style="margin-top:18px;">Comenzar prueba</button>
+    </div>
+  `;
+  wrap.appendChild(shell);
+
+  setTimeout(()=>{
+    document.getElementById('btnEmpezar').onclick = async ()=>{
+      const nombre = document.getElementById('fNombre').value.trim();
+      const cedula = document.getElementById('fCedula').value.trim();
+      const fecha = document.getElementById('fFecha').value;
+      const errBox = document.getElementById('datosError');
+      if(!nombre || !cedula || !fecha){
+        errBox.style.display='block';
+        errBox.textContent='Complete su nombre, cédula y fecha para continuar.';
+        return;
+      }
+      const key = 'intento:'+test.id+':'+cedula;
+      const existente = await stGet(key);
+      if(existente){
+        APP.ctx.intentoExistente = existente;
+        APP.view = 'estBloqueado';
+        render();
+        return;
+      }
+      const now = Date.now();
+      const intento = {
+        testId: test.id, nombre, cedula, fecha,
+        horaInicio: nowTimeStr(), horaInicioTs: now,
+        horaFin: null, horaFinTs: null, duracionSeg: null,
+        estado: 'en_progreso', calificacion: null, respuestas: [],
+      };
+      const guardado = await stSet(key, intento);
+      if(!guardado){
+        errBox.style.display='block';
+        errBox.textContent='No se pudo registrar su intento (fallo de almacenamiento del navegador). Recargue la página e intente de nuevo; si persiste, avise a su docente.';
+        return;
+      }
+      APP.ctx.intento = intento;
+      APP.ctx.attemptKey = key;
+      // orden aleatorio de preguntas y opciones, semilla estable por estudiante+prueba
+      const seed = test.id + '|' + cedula;
+      const preguntasOrdenadas = shuffleSeeded(test.preguntas, seed).map(p=>{
+        if(p.tipo==='seleccion'){
+          return {...p, opciones: shuffleSeeded(p.opciones, seed+'|'+p.id)};
+        }
+        return p;
+      });
+      APP.ctx.preguntas = preguntasOrdenadas;
+      APP.ctx.qIndex = 0;
+      APP.ctx.respuestasTemp = {};
+      APP.ctx.tiemposTemp = {};
+      APP.view = 'estPrueba';
+      render();
+    };
+  });
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: ESTUDIANTE — PRUEBA EN CURSO (anti-abandono activo)             */
+/* ===================================================================== */
+let ANTI_CHEAT_BOUND = false;
+let ANTI_CHEAT_TRIGGERED = false;
+let Q_START_TS = 0;
+
+function ViewEstPrueba(){
+  const test = APP.ctx.test;
+  const preguntas = APP.ctx.preguntas;
+  const idx = APP.ctx.qIndex;
+  const pregunta = preguntas[idx];
+  Q_START_TS = Date.now();
+  ANTI_CHEAT_TRIGGERED = false;
+
+  const wrap = document.createElement('div');
+  wrap.appendChild(ManifestHeader(test.titulo));
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.style.maxWidth='680px';
+
+  const total = preguntas.length;
+  const track = preguntas.map((p,i)=>{
+    const state = i<idx ? 'done' : (i===idx ? 'active' : '');
+    return `<div class="wp ${state}">${i+1}</div>` + (i<total-1 ? `<div class="seg ${i<idx?'done':''}"></div>` : '');
+  }).join('');
+
+  shell.innerHTML = `
+    <div class="card" style="border-color:var(--gold); background:#FFFDF7;">
+      <div class="flex-between">
+        <div class="mono muted" style="font-size:12px;">${esc(APP.ctx.intento.nombre)} · C.I. ${esc(APP.ctx.intento.cedula)}</div>
+        <div class="qtimer"><span class="led"></span> Prueba en curso — no cambie de pantalla</div>
+      </div>
+    </div>
+    <div class="route-track">${track}</div>
+    <div class="card">
+      <span class="section-label">Pregunta ${idx+1} de ${total} · ${pregunta.puntos} pts</span>
+      <h3 style="font-size:17px; margin-top:8px; line-height:1.5;">${esc(pregunta.texto)}</h3>
+      <div id="answerArea" style="margin-top:18px;"></div>
+      <div class="flex-between" style="margin-top:22px;">
+        <button class="btn btn-ghost" id="btnPrev" ${idx===0?'disabled':''}>◂ Anterior</button>
+        <button class="btn btn-primary" id="btnNext">${idx===total-1 ? 'Finalizar prueba' : 'Siguiente ▸'}</button>
+      </div>
+    </div>
+  `;
+  wrap.appendChild(shell);
+
+  setTimeout(()=>{
+    const area = document.getElementById('answerArea');
+    const savedAnswer = APP.ctx.respuestasTemp[pregunta.id] || '';
+    if(pregunta.tipo==='corta'){
+      area.innerHTML = `<textarea id="respCorta" style="font-family:'Inter',sans-serif;" placeholder="Escriba su respuesta...">${esc(savedAnswer)}</textarea>`;
+      document.getElementById('respCorta').oninput = e=> APP.ctx.respuestasTemp[pregunta.id]=e.target.value;
+    } else {
+      const letras = 'ABCDEFGH';
+      area.innerHTML = pregunta.opciones.map((op,oi)=>`
+        <div class="opt-row ${savedAnswer===op?'selected':''}" data-op="${oi}">
+          <span class="letter">${letras[oi]}</span>
+          <input type="radio" name="opt" ${savedAnswer===op?'checked':''} style="margin-top:4px;">
+          <span>${esc(op)}</span>
+        </div>`).join('');
+      area.querySelectorAll('.opt-row').forEach(row=>{
+        row.onclick=()=>{
+          area.querySelectorAll('.opt-row').forEach(r=>{r.classList.remove('selected'); r.querySelector('input').checked=false;});
+          row.classList.add('selected');
+          row.querySelector('input').checked=true;
+          const oi = +row.getAttribute('data-op');
+          APP.ctx.respuestasTemp[pregunta.id] = pregunta.opciones[oi];
+        };
+      });
+    }
+
+    document.getElementById('btnPrev').onclick = ()=>{ registrarTiempo(pregunta); APP.ctx.qIndex--; render(); };
+    document.getElementById('btnNext').onclick = async ()=>{
+      registrarTiempo(pregunta);
+      if(idx===total-1){
+        await finalizarPrueba();
+      } else {
+        APP.ctx.qIndex++;
+        render();
+      }
+    };
+  });
+
+  bindAntiCheat();
+  return wrap;
+}
+
+function registrarTiempo(pregunta){
+  const elapsed = (Date.now()-Q_START_TS)/1000;
+  APP.ctx.tiemposTemp[pregunta.id] = (APP.ctx.tiemposTemp[pregunta.id]||0) + elapsed;
+}
+
+function bindAntiCheat(){
+  if(ANTI_CHEAT_BOUND) return;
+  ANTI_CHEAT_BOUND = true;
+  const handleLeave = async ()=>{
+    if(APP.view !== 'estPrueba') return;
+    if(ANTI_CHEAT_TRIGGERED) return;
+    ANTI_CHEAT_TRIGGERED = true;
+    await anularPorAbandono();
+  };
+  document.addEventListener('visibilitychange', ()=>{ if(document.hidden) handleLeave(); });
+  window.addEventListener('blur', handleLeave);
+  window.addEventListener('beforeunload', (e)=>{
+    if(APP.view==='estPrueba'){ e.preventDefault(); e.returnValue=''; }
+  });
+}
+
+async function anularPorAbandono(){
+  const intento = APP.ctx.intento;
+  if(!intento || intento.estado!=='en_progreso') return;
+  intento.estado='anulado';
+  intento.calificacion=0;
+  intento.motivoAnulacion='El estudiante salió de la aplicación o cambió de pantalla durante la prueba.';
+  intento.horaFin = nowTimeStr();
+  intento.horaFinTs = Date.now();
+  intento.duracionSeg = (intento.horaFinTs - intento.horaInicioTs)/1000;
+  await stSet(APP.ctx.attemptKey, intento);
+  APP.view='estBloqueado';
+  APP.ctx.intentoExistente = intento;
+  render();
+}
+
+async function finalizarPrueba(){
+  const test = APP.ctx.test;
+  const intento = APP.ctx.intento;
+  const respuestas = APP.ctx.preguntas.map(p=>({
+    preguntaId: p.id,
+    respuesta: APP.ctx.respuestasTemp[p.id] || '',
+    tiempoSegundos: APP.ctx.tiemposTemp[p.id] || 0,
+  }));
+  let puntaje = 0;
+  respuestas.forEach(r=>{
+    const preg = test.preguntas.find(p=>p.id===r.preguntaId);
+    if(preg && evaluarRespuesta(preg, r.respuesta)) puntaje += (preg.puntos||0);
+  });
+  intento.respuestas = respuestas;
+  intento.calificacion = Math.round(puntaje*100)/100;
+  intento.estado = 'finalizado';
+  intento.horaFin = nowTimeStr();
+  intento.horaFinTs = Date.now();
+  intento.duracionSeg = (intento.horaFinTs - intento.horaInicioTs)/1000;
+  await stSet(APP.ctx.attemptKey, intento);
+  APP.ctx.intentoFinal = intento;
+  APP.view='estResultado';
+  render();
+}
+
+/* ===================================================================== */
+/* VIEW: ESTUDIANTE — RESULTADO / RETROALIMENTACIÓN INMEDIATA            */
+/* ===================================================================== */
+function ViewEstResultado(){
+  const test = APP.ctx.test;
+  const intento = APP.ctx.intentoFinal;
+  const wrap = document.createElement('div');
+  wrap.appendChild(ManifestHeader(test.titulo));
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.style.maxWidth='680px';
+
+  const pct = Math.max(0, Math.min(100, intento.calificacion));
+  const revisadas = test.preguntas.map(preg=>{
+    const r = intento.respuestas.find(x=>x.preguntaId===preg.id) || {respuesta:''};
+    const ok = evaluarRespuesta(preg, r.respuesta);
+    return { preg, r, ok };
+  });
+  const nCorrectas = revisadas.filter(x=>x.ok).length;
+  const nIncorrectas = revisadas.length - nCorrectas;
+
+  shell.innerHTML = `
+    <div class="card score-hero" id="printArea">
+      <div class="ring" style="--pct:${pct};"><div class="inner"><span class="num">${intento.calificacion.toFixed(1)}</span><span class="of">DE 100 PTS</span></div></div>
+      <h2 style="font-size:19px;">${esc(intento.nombre)}</h2>
+      <p class="muted">C.I. ${esc(intento.cedula)} · ${esc(intento.fecha)} · Duración: ${fmtDuration(intento.duracionSeg)}</p>
+      <div style="margin-top:10px;">
+        <span class="badge ok" style="margin-right:8px;">${nCorrectas} correcta(s)</span>
+        <span class="badge bad">${nIncorrectas} incorrecta(s)</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="flex-between">
+        <span class="section-label" style="margin-bottom:0;">Informe de retroalimentación · pregunta por pregunta</span>
+        <button class="btn btn-ghost btn-sm no-print" id="btnImprimir">🖨 Imprimir / Guardar PDF</button>
+      </div>
+      <div style="margin-top:12px;">
+        ${revisadas.map(({preg,r,ok},i)=>`<div class="qa-review ${ok?'correct':'incorrect'}">
+            <div class="qtext">${i+1}. ${esc(preg.texto)} <span class="pill" style="margin-left:6px;">${ok?'✓ Correcta':'✗ Incorrecta'} · ${ok?preg.puntos:0}/${preg.puntos} pts</span></div>
+            <div class="arow">Su respuesta: <b>${esc(r.respuesta||'(sin responder)')}</b></div>
+            <div class="arow">Respuesta correcta: <b>${esc(preg.respuesta)}</b></div>
+          </div>`).join('')}
+      </div>
+    </div>
+    <div class="notice info no-print">Su prueba ha sido registrada. Esta ventana ya no permite reenviar respuestas para esta prueba.</div>
+  `;
+  wrap.appendChild(shell);
+  setTimeout(()=>{
+    const btn = document.getElementById('btnImprimir');
+    if(btn) btn.onclick = ()=> window.print();
+  });
+  return wrap;
+}
+
+/* ===================================================================== */
+/* VIEW: ESTUDIANTE — BLOQUEADO (anulado o ya presentado)                */
+/* ===================================================================== */
+function ViewEstBloqueado(){
+  const a = APP.ctx.intentoExistente;
+  const wrap = document.createElement('div');
+  wrap.appendChild(ManifestHeader());
+  const shell = document.createElement('div');
+  shell.className='shell';
+  shell.style.maxWidth='520px';
+
+  let msg, tipo;
+  if(!a){
+    msg = 'No fue posible continuar con esta prueba.'; tipo='danger';
+  } else if(a.estado==='anulado'){
+    msg = 'Su prueba fue anulada: ' + (a.motivoAnulacion || 'salió de la aplicación durante el examen.') + ' Su calificación registrada es 0. Este código ya no está disponible para su cédula. Contacte a su docente si considera que hubo un error.';
+    tipo='danger';
+  } else if(a.estado==='finalizado'){
+    msg = `Usted ya presentó esta prueba el ${esc(a.fecha)} a las ${esc(a.horaInicio)}. Su calificación registrada es ${a.calificacion!=null?a.calificacion.toFixed(1):'—'} / 100. Solo se permite un intento por prueba.`;
+    tipo='warn';
+  } else {
+    msg = 'Ya existe un intento en curso registrado con su cédula para esta prueba.'; tipo='warn';
+  }
+
+  shell.innerHTML = `
+    <div class="card">
+      <span class="section-label">Acceso no disponible</span>
+      <div class="notice ${tipo}" style="margin-top:10px;">${msg}</div>
+      <button class="btn btn-ghost btn-block" id="btnVolver" style="margin-top:16px;">Volver al inicio</button>
+    </div>
+  `;
+  wrap.appendChild(shell);
+  setTimeout(()=>{
+    document.getElementById('btnVolver').onclick = ()=>{ APP.view='home'; APP.ctx={}; render(); };
+  });
+  return wrap;
+}
+
+/* =============================== bootstrap =============================== */
+async function storageSelfCheck(){
+  try{
+    if(!window.storage) return false;
+    const testKey = '__selftest__' + Date.now();
+    const w = await window.storage.set(testKey, 'ok', true);
+    if(!w) return false;
+    const r = await window.storage.get(testKey, true);
+    stDelete(testKey);
+    return !!(r && r.value === 'ok');
+  }catch(e){
+    console.error('Autoprueba de almacenamiento falló:', e);
+    return false;
+  }
+}
+
+function pintarErrorAlmacenamiento(){
+  document.getElementById('app').innerHTML = `
+    <div style="max-width:640px; margin:60px auto; padding:0 20px;">
+      <div class="notice danger" style="padding:22px;">
+        <h3 style="margin-bottom:10px; color:#7A231A;">No se pudo guardar información en este navegador</h3>
+        <p style="margin-bottom:10px;">La aplicación no logró escribir datos de prueba en este navegador. Esto ocurre normalmente por una de estas causas:</p>
+        <ul>
+          <li>Está abriendo el archivo con doble clic (dirección que empieza con <span class="mono">file://</span>). Algunos navegadores, sobre todo en equipos con perfil empresarial/gestionado (como el que se ve en su captura: "Finalizar actualización", cuenta corporativa), bloquean el almacenamiento local para archivos abiertos así.</li>
+          <li>Modo incógnito o configuración de privacidad que bloquea el almacenamiento local del sitio.</li>
+        </ul>
+        <p style="margin-top:12px;"><b>Soluciones recomendadas, de más simple a más robusta:</b></p>
+        <ul>
+          <li><b>Opción rápida:</b> pruebe abrir el archivo en un navegador distinto (por ejemplo, en una ventana de Chrome sin perfil corporativo, o en Firefox/Edge) y revise que no esté en modo incógnito.</li>
+          <li><b>Opción recomendada para pruebas locales:</b> en vez de doble clic, sirva la carpeta con un servidor local. Con Python instalado, abra una terminal en la carpeta del archivo y ejecute <span class="mono">python -m http.server</span>, luego abra <span class="mono">http://localhost:8000</span> en el navegador.</li>
+          <li><b>Opción recomendada para uso real con estudiantes:</b> configure Firebase siguiendo el README.md incluido y pruebe la app ya publicada en su sitio (Netlify, Vercel o GitHub Pages). Ahí este problema no ocurre.</li>
+        </ul>
+      </div>
+    </div>`;
+}
+
+(async function init(){
+  const ok = await storageSelfCheck();
+  if(!ok){
+    pintarErrorAlmacenamiento();
+    return;
+  }
+  const hash = location.hash || '';
+  const m = hash.match(/codigo=([A-Za-z0-9-]+)/);
+  if(m){
+    APP.ctx.codigoPrellenado = decodeURIComponent(m[1]).toUpperCase();
+    APP.view = 'estAcceso';
+  }
+  render();
+})();
+</script>
+</body>
+</html>

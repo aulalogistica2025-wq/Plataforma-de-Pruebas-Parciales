@@ -1,0 +1,20 @@
+// Reglas de seguridad para Firestore.
+// Cópialas en Firebase Console > Firestore Database > Reglas.
+//
+// Estas reglas permiten leer y escribir la colección "storage" (la que usa
+// la app) a cualquier persona con el enlace de tu sitio. Es un nivel de
+// protección básico, adecuado para un curso, pero no es autenticación real:
+// cualquiera con la URL de tu app puede leer/escribir esa colección.
+//
+// Si necesitas más seguridad (por ejemplo, evitar que un estudiante borre
+// pruebas), la opción recomendada es agregar Firebase Authentication y
+// restringir la escritura en "test:*" solo a un usuario docente autenticado.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /storage/{docId} {
+      allow read, write: if true;
+    }
+  }
+}
