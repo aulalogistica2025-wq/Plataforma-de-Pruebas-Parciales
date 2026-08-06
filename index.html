@@ -429,7 +429,14 @@ const APP = {
   docenteAuth: false,
 };
 
-const PIN_DOCENTE = 'CRUV-2026'; // PIN de acceso al panel docente
+const PIN_DOCENTE = 'CRUV-2026'; // clave de acceso docente "de fábrica" (se usa solo si nadie ha definido una nueva desde la app)
+async function getPinVigente(){
+  const cfg = await stGet('config:acceso');
+  return (cfg && cfg.pin) ? cfg.pin : PIN_DOCENTE;
+}
+async function cambiarPin(nuevoPin){
+  return await stSet('config:acceso', { pin: nuevoPin, actualizado: Date.now() });
+}
 
 const ENCABEZADO = {
   linea1: 'Universidad de Panamá',
@@ -718,7 +725,7 @@ function ViewDocenteLogin(){
       <div id="pinError" class="notice danger" style="display:none; margin-top:10px;">Código incorrecto. Intente nuevamente.</div>
       <button class="btn btn-primary btn-block" id="pinBtn" style="margin-top:16px;">Ingresar al panel</button>
       <div class="help-block" style="margin-top:18px;">
-        El código de acceso docente por defecto de esta instalación es <b class="mono">${PIN_DOCENTE}</b>. Puede cambiarlo directamente en el código fuente de la aplicación (constante <span class="mono">PIN_DOCENTE</span>) antes de compartirla con otros profesores.
+        Si nunca ha cambiado la clave, el código de acceso de fábrica es <b class="mono">${PIN_DOCENTE}</b>. Una vez dentro del panel, puede cambiarla por una propia en "⚙ Cambiar clave de acceso" — no necesita tocar ningún código.
       </div>
     </div>
   `;
@@ -726,8 +733,11 @@ function ViewDocenteLogin(){
   setTimeout(()=>{
     const btn=document.getElementById('pinBtn');
     const input=document.getElementById('pinInput');
-    const tryLogin=()=>{
-      if(input.value.trim()===PIN_DOCENTE){
+    const tryLogin=async ()=>{
+      btn.disabled = true;
+      const pinVigente = await getPinVigente();
+      btn.disabled = false;
+      if(input.value.trim()===pinVigente){
         APP.docenteAuth=true; APP.view='docenteDashboard'; render();
       } else {
         document.getElementById('pinError').style.display='block';
@@ -757,11 +767,51 @@ function ViewDocenteDashboard(){
       </div>
       <button class="btn btn-gold" id="btnNueva">+ Nueva prueba</button>
     </div>
+    <details style="margin-bottom:18px;">
+      <summary class="btn btn-ghost btn-sm" style="display:inline-block; list-style:none;">⚙ Cambiar clave de acceso</summary>
+      <div class="card" style="margin-top:10px; max-width:420px;">
+        <label class="field-label">Clave actual</label>
+        <input type="password" id="pinActualInput" placeholder="Clave actual">
+        <label class="field-label" style="margin-top:10px;">Nueva clave</label>
+        <input type="password" id="pinNuevaInput" placeholder="Mínimo 4 caracteres">
+        <label class="field-label" style="margin-top:10px;">Confirmar nueva clave</label>
+        <input type="password" id="pinConfirmarInput" placeholder="Repita la nueva clave">
+        <div id="pinCambioMsg" style="display:none; margin-top:10px;"></div>
+        <button class="btn btn-primary" id="btnGuardarPin" style="margin-top:14px;">Guardar nueva clave</button>
+      </div>
+    </details>
     <div id="listaPruebas" class="card"><p class="muted">Cargando pruebas…</p></div>
   `;
   wrap.appendChild(shell);
   setTimeout(async ()=>{
     document.getElementById('btnNueva').onclick=()=>{ APP.view='docenteCrear'; render(); };
+    const btnGuardarPin = document.getElementById('btnGuardarPin');
+    if(btnGuardarPin) btnGuardarPin.onclick = async ()=>{
+      const actual = document.getElementById('pinActualInput').value;
+      const nueva = document.getElementById('pinNuevaInput').value.trim();
+      const confirmar = document.getElementById('pinConfirmarInput').value.trim();
+      const msg = document.getElementById('pinCambioMsg');
+      msg.style.display='block';
+      const pinVigente = await getPinVigente();
+      if(actual !== pinVigente){
+        msg.className='notice danger'; msg.textContent='La clave actual no es correcta.'; return;
+      }
+      if(nueva.length < 4){
+        msg.className='notice danger'; msg.textContent='La nueva clave debe tener al menos 4 caracteres.'; return;
+      }
+      if(nueva !== confirmar){
+        msg.className='notice danger'; msg.textContent='La nueva clave y su confirmación no coinciden.'; return;
+      }
+      const ok = await cambiarPin(nueva);
+      if(ok){
+        msg.className='notice success'; msg.textContent='Clave actualizada correctamente. Úsela la próxima vez que ingrese al panel.';
+        document.getElementById('pinActualInput').value='';
+        document.getElementById('pinNuevaInput').value='';
+        document.getElementById('pinConfirmarInput').value='';
+      } else {
+        msg.className='notice danger'; msg.textContent='No se pudo guardar la nueva clave (fallo de almacenamiento). Intente de nuevo.';
+      }
+    };
     const keys = await stList('test:');
     const cont = document.getElementById('listaPruebas');
     if(!keys.length){
